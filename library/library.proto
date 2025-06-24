@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+option go_package = "example/grpc_demo/library";
+
+package library;
+
+service UserService {
+    rpc Register(User) returns (AuthResponse);
+    rpc Login(UserCredentials) returns (AuthResponse);
+}
+
+service LibraryService {
+    rpc AddBook(Book) returns (BookResponse);
+    rpc UpdateBook(Book) returns (BookResponse);
+    rpc DeleteBook(BookRequest) returns (BookResponse);
+    rpc ListBooks(ListBookRequest) returns (ListBookResponse);
+    rpc BatchAddBooks(stream Book) returns (BatchResponse);
+}
+
+message User {
+    string username = 1;
+    string password = 2;
+}
+
+message UserCredentials {
+    string username = 1;
+    string password = 2;
+}
+
+message AuthResponse {
+    string token = 1;
+    string message = 2;
+}
+
+message BookRequest {
+    string id = 1;
+}
+
+message BookResponse {
+    string id = 1;
+    string message = 2;
+}
+
+message Book {
+    string id = 1;
+    string title = 2;
+    string auther = 3;
+}
+
+message ListBookRequest {
+    int32 page = 1;
+    int32 page_size = 2;
+}
+
+message ListBookResponse {
+    repeated Book books = 1;
+    int32 total_count = 2;
+}
+
+message BatchResponse {
+    repeated BookResponse reponses = 1;
+}
