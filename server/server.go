@@ -88,6 +88,40 @@ func (s *server) DeleteBook(ctx context.Context, req *pb.BookRequest) (*pb.BookR
 	return &pb.BookResponse{Id: req.GetId(), Message: "Book deleted successfully"}, nil
 }
 
+func (s *server) ListBooks(ctx context.Context, req *pb.ListBookRequest) (*pb.ListBookResponse, error) {
+	page := req.GetPage()
+	pageSize := req.GetPageSize()
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	start := (page - 1) * pageSize
+
+	var (
+		books      []*pb.Book
+		totalCount int32
+		idx        int32
+	)
+
+	s.books.Range(func(_, value any) bool {
+		if book, ok := value.(*pb.Book); ok {
+			if idx >= start && int32(len(books)) < pageSize {
+				books = append(books, book)
+			}
+			idx++
+		}
+		return true
+	})
+	totalCount = idx
+
+	return &pb.ListBookResponse{
+		Books:      books,
+		TotalCount: totalCount,
+	}, nil
+}
+
 func main() {
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
