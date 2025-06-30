@@ -70,4 +70,30 @@ func main() {
 		log.Fatalf("could not delete book: %v", err)
 	}
 	fmt.Printf("DeleteBook Response: %s, ID: %s\n", deleteResp.GetMessage(), deleteResp.GetId())
+
+	// Add multiple books for pagination test
+	for i := 1; i <= 10; i++ {
+		b := &pb.Book{
+			Id:     fmt.Sprintf("book%d", i),
+			Title:  fmt.Sprintf("Book Title %d", i),
+			Auther: fmt.Sprintf("Author %d", i),
+		}
+		_, err := libraryClient.AddBook(context.Background(), b)
+		if err != nil {
+			log.Printf("could not add book %d: %v", i, err)
+		}
+	}
+
+	// ListBooks
+	listResp, err := libraryClient.ListBooks(context.Background(), &pb.ListBookRequest{
+		Page:     1,
+		PageSize: 5,
+	})
+	if err != nil {
+		log.Fatalf("could not list books: %v", err)
+	}
+	fmt.Printf("ListBooks Response: total=%d\n", listResp.GetTotalCount())
+	for i, b := range listResp.GetBooks() {
+		fmt.Printf("Book %d: ID=%s, Title=%s, Auther=%s\n", i+1, b.GetId(), b.GetTitle(), b.GetAuther())
+	}
 }
