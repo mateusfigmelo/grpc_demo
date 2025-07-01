@@ -9,7 +9,10 @@ import (
 
 	pb "example/grpc_demo/library"
 
+	"io"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 )
 
 type server struct {
@@ -120,6 +123,30 @@ func (s *server) ListBooks(ctx context.Context, req *pb.ListBookRequest) (*pb.Li
 		Books:      books,
 		TotalCount: totalCount,
 	}, nil
+}
+
+func (s *server) BatchAddBooks(stream pb.LibraryService_BatchAddBooksServer) error {
+	var responses []*pb.BookResponse
+	for {
+		book, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&pb.BatchResponse{Reponses: responses})
+		}
+		if err != nil {
+			return status.Errorf(13, "failed to receive book: %v", err)
+		}
+
+		if book.GetId() == "" {
+			responses = append(responses, &pb.BookResponse{Id: "", Message: "Book ID is required"})
+			continue
+		}
+		if _, exists := s.books.Load(book.GetId()); exists {
+			responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Book already exists"})
+			continue
+		}
+		s.books.Store(book.GetId(), book)
+		responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Book added successfully"})
+	}
 }
 
 func main() {
