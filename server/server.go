@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
-	"sync"
 
 	pb "example/grpc_demo/library"
 
-	"io"
-
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 )
@@ -18,21 +18,32 @@ import (
 type server struct {
 	pb.UnimplementedUserServiceServer
 	pb.UnimplementedLibraryServiceServer
-	users sync.Map
-	books sync.Map // key: book id, value: *pb.Book
+	db *pgxpool.Pool
 }
 
 func (s *server) Register(ctx context.Context, user *pb.User) (*pb.AuthResponse, error) {
 	username := user.GetUsername()
 	password := user.GetPassword()
 
-	if _, exists := s.users.Load(username); exists {
-		return &pb.AuthResponse{
-			Message: "Username already exists",
-		}, nil
+	// Check if user exists
+	var exists bool
+	err := s.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE username=$1)", username).Scan(&exists)
+	if err != nil {
+		return &pb.AuthResponse{Message: "Database error"}, err
+	}
+	if exists {
+		return &pb.AuthResponse{Message: "Username already exists"}, nil
 	}
 
-	s.users.Store(username, password)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return &pb.AuthResponse{Message: "Failed to hash password"}, err
+	}
+
+	_, err = s.db.Exec(ctx, "INSERT INTO users (username, password_hash) VALUES ($1, $2)", username, string(hash))
+	if err != nil {
+		return &pb.AuthResponse{Message: "Failed to create user"}, err
+	}
 
 	return &pb.AuthResponse{
 		Message: "User registered successfully",
@@ -44,17 +55,20 @@ func (s *server) Login(ctx context.Context, creds *pb.UserCredentials) (*pb.Auth
 	username := creds.GetUsername()
 	password := creds.GetPassword()
 
-	if storedPassword, exists := s.users.Load(username); exists {
-		if storedPassword == password {
-			return &pb.AuthResponse{
-				Message: "Login successful",
-				Token:   "dummy_token",
-			}, nil
-		}
+	var hash string
+	err := s.db.QueryRow(ctx, "SELECT password_hash FROM users WHERE username=$1", username).Scan(&hash)
+	if err != nil {
+		return &pb.AuthResponse{Message: "Invalid username or password"}, nil
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	if err != nil {
+		return &pb.AuthResponse{Message: "Invalid username or password"}, nil
 	}
 
 	return &pb.AuthResponse{
-		Message: "Invalid username or password",
+		Message: "Login successful",
+		Token:   "dummy_token",
 	}, nil
 }
 
@@ -62,10 +76,19 @@ func (s *server) AddBook(ctx context.Context, book *pb.Book) (*pb.BookResponse, 
 	if book.GetId() == "" {
 		return &pb.BookResponse{Id: "", Message: "Book ID is required"}, nil
 	}
-	if _, exists := s.books.Load(book.GetId()); exists {
+	// Check if book exists
+	var exists bool
+	err := s.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM books WHERE id=$1)", book.GetId()).Scan(&exists)
+	if err != nil {
+		return &pb.BookResponse{Id: book.GetId(), Message: "Database error"}, err
+	}
+	if exists {
 		return &pb.BookResponse{Id: book.GetId(), Message: "Book already exists"}, nil
 	}
-	s.books.Store(book.GetId(), book)
+	_, err = s.db.Exec(ctx, "INSERT INTO books (id, title, auther) VALUES ($1, $2, $3)", book.GetId(), book.GetTitle(), book.GetAuther())
+	if err != nil {
+		return &pb.BookResponse{Id: book.GetId(), Message: "Failed to add book"}, err
+	}
 	return &pb.BookResponse{Id: book.GetId(), Message: "Book added successfully"}, nil
 }
 
@@ -73,10 +96,13 @@ func (s *server) UpdateBook(ctx context.Context, book *pb.Book) (*pb.BookRespons
 	if book.GetId() == "" {
 		return &pb.BookResponse{Id: "", Message: "Book ID is required"}, nil
 	}
-	if _, exists := s.books.Load(book.GetId()); !exists {
+	res, err := s.db.Exec(ctx, "UPDATE books SET title=$1, auther=$2 WHERE id=$3", book.GetTitle(), book.GetAuther(), book.GetId())
+	if err != nil {
+		return &pb.BookResponse{Id: book.GetId(), Message: "Failed to update book"}, err
+	}
+	if res.RowsAffected() == 0 {
 		return &pb.BookResponse{Id: book.GetId(), Message: "Book not found"}, nil
 	}
-	s.books.Store(book.GetId(), book)
 	return &pb.BookResponse{Id: book.GetId(), Message: "Book updated successfully"}, nil
 }
 
@@ -84,10 +110,13 @@ func (s *server) DeleteBook(ctx context.Context, req *pb.BookRequest) (*pb.BookR
 	if req.GetId() == "" {
 		return &pb.BookResponse{Id: "", Message: "Book ID is required"}, nil
 	}
-	if _, exists := s.books.Load(req.GetId()); !exists {
+	res, err := s.db.Exec(ctx, "DELETE FROM books WHERE id=$1", req.GetId())
+	if err != nil {
+		return &pb.BookResponse{Id: req.GetId(), Message: "Failed to delete book"}, err
+	}
+	if res.RowsAffected() == 0 {
 		return &pb.BookResponse{Id: req.GetId(), Message: "Book not found"}, nil
 	}
-	s.books.Delete(req.GetId())
 	return &pb.BookResponse{Id: req.GetId(), Message: "Book deleted successfully"}, nil
 }
 
@@ -100,33 +129,33 @@ func (s *server) ListBooks(ctx context.Context, req *pb.ListBookRequest) (*pb.Li
 	if pageSize < 1 {
 		pageSize = 10
 	}
-	start := (page - 1) * pageSize
+	offset := (page - 1) * pageSize
 
-	var (
-		books      []*pb.Book
-		totalCount int32
-		idx        int32
-	)
+	rows, err := s.db.Query(ctx, "SELECT id, title, auther FROM books ORDER BY id LIMIT $1 OFFSET $2", pageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-	s.books.Range(func(_, value any) bool {
-		if book, ok := value.(*pb.Book); ok {
-			if idx >= start && int32(len(books)) < pageSize {
-				books = append(books, book)
-			}
-			idx++
+	var books []*pb.Book
+	for rows.Next() {
+		var b pb.Book
+		if err := rows.Scan(&b.Id, &b.Title, &b.Auther); err != nil {
+			return nil, err
 		}
-		return true
-	})
-	totalCount = idx
-
-	return &pb.ListBookResponse{
-		Books:      books,
-		TotalCount: totalCount,
-	}, nil
+		books = append(books, &b)
+	}
+	var totalCount int32
+	err = s.db.QueryRow(ctx, "SELECT COUNT(*) FROM books").Scan(&totalCount)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ListBookResponse{Books: books, TotalCount: totalCount}, nil
 }
 
 func (s *server) BatchAddBooks(stream pb.LibraryService_BatchAddBooksServer) error {
 	var responses []*pb.BookResponse
+	ctx := stream.Context()
 	for {
 		book, err := stream.Recv()
 		if err == io.EOF {
@@ -135,16 +164,25 @@ func (s *server) BatchAddBooks(stream pb.LibraryService_BatchAddBooksServer) err
 		if err != nil {
 			return status.Errorf(13, "failed to receive book: %v", err)
 		}
-
 		if book.GetId() == "" {
 			responses = append(responses, &pb.BookResponse{Id: "", Message: "Book ID is required"})
 			continue
 		}
-		if _, exists := s.books.Load(book.GetId()); exists {
+		var exists bool
+		err = s.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM books WHERE id=$1)", book.GetId()).Scan(&exists)
+		if err != nil {
+			responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Database error"})
+			continue
+		}
+		if exists {
 			responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Book already exists"})
 			continue
 		}
-		s.books.Store(book.GetId(), book)
+		_, err = s.db.Exec(ctx, "INSERT INTO books (id, title, auther) VALUES ($1, $2, $3)", book.GetId(), book.GetTitle(), book.GetAuther())
+		if err != nil {
+			responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Failed to add book"})
+			continue
+		}
 		responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Book added successfully"})
 	}
 }
@@ -154,10 +192,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
+	dbpool, err := NewDBPool()
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer dbpool.Close()
+
+	if err := RunMigrations(dbpool); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
+	}
 
 	s := grpc.NewServer()
-	pb.RegisterUserServiceServer(s, &server{})
-	pb.RegisterLibraryServiceServer(s, &server{})
+	pb.RegisterUserServiceServer(s, &server{db: dbpool})
+	pb.RegisterLibraryServiceServer(s, &server{db: dbpool})
 
 	fmt.Println("Server is running on port: 50051")
 	if err := s.Serve(lis); err != nil {
