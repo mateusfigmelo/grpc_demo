@@ -96,4 +96,28 @@ func main() {
 	for i, b := range listResp.GetBooks() {
 		fmt.Printf("Book %d: ID=%s, Title=%s, Auther=%s\n", i+1, b.GetId(), b.GetTitle(), b.GetAuther())
 	}
+
+	// BatchAddBooks (client-side streaming)
+	batchStream, err := libraryClient.BatchAddBooks(context.Background())
+	if err != nil {
+		log.Fatalf("could not start batch add books: %v", err)
+	}
+	for i := 11; i <= 15; i++ {
+		b := &pb.Book{
+			Id:     fmt.Sprintf("batchbook%d", i),
+			Title:  fmt.Sprintf("Batch Book Title %d", i),
+			Auther: fmt.Sprintf("Batch Author %d", i),
+		}
+		if err := batchStream.Send(b); err != nil {
+			log.Fatalf("failed to send book %d: %v", i, err)
+		}
+	}
+	batchResp, err := batchStream.CloseAndRecv()
+	if err != nil {
+		log.Fatalf("failed to receive batch response: %v", err)
+	}
+	fmt.Println("BatchAddBooks Response:")
+	for i, r := range batchResp.GetReponses() {
+		fmt.Printf("  Book %d: ID=%s, Message=%s\n", i+1, r.GetId(), r.GetMessage())
+	}
 }
