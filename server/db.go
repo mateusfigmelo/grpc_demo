@@ -41,3 +41,12 @@ func RunMigrations(pool *pgxpool.Pool) error {
 	_, err = pool.Exec(ctx, string(data))
 	return err
 }
+
+func ClearDatabase(pool *pgxpool.Pool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Drop tables completely
+	_, err := pool.Exec(ctx, "DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS users;")
+	return err
+}

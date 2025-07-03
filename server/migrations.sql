@@ -9,5 +9,5 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS books (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
-    auther TEXT NOT NULL
+    author TEXT NOT NULL
 ); 

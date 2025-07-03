@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -85,7 +87,7 @@ func (s *server) AddBook(ctx context.Context, book *pb.Book) (*pb.BookResponse, 
 	if exists {
 		return &pb.BookResponse{Id: book.GetId(), Message: "Book already exists"}, nil
 	}
-	_, err = s.db.Exec(ctx, "INSERT INTO books (id, title, auther) VALUES ($1, $2, $3)", book.GetId(), book.GetTitle(), book.GetAuther())
+	_, err = s.db.Exec(ctx, "INSERT INTO books (id, title, author) VALUES ($1, $2, $3)", book.GetId(), book.GetTitle(), book.GetAuthor())
 	if err != nil {
 		return &pb.BookResponse{Id: book.GetId(), Message: "Failed to add book"}, err
 	}
@@ -96,7 +98,7 @@ func (s *server) UpdateBook(ctx context.Context, book *pb.Book) (*pb.BookRespons
 	if book.GetId() == "" {
 		return &pb.BookResponse{Id: "", Message: "Book ID is required"}, nil
 	}
-	res, err := s.db.Exec(ctx, "UPDATE books SET title=$1, auther=$2 WHERE id=$3", book.GetTitle(), book.GetAuther(), book.GetId())
+	res, err := s.db.Exec(ctx, "UPDATE books SET title=$1, author=$2 WHERE id=$3", book.GetTitle(), book.GetAuthor(), book.GetId())
 	if err != nil {
 		return &pb.BookResponse{Id: book.GetId(), Message: "Failed to update book"}, err
 	}
@@ -131,7 +133,7 @@ func (s *server) ListBooks(ctx context.Context, req *pb.ListBookRequest) (*pb.Li
 	}
 	offset := (page - 1) * pageSize
 
-	rows, err := s.db.Query(ctx, "SELECT id, title, auther FROM books ORDER BY id LIMIT $1 OFFSET $2", pageSize, offset)
+	rows, err := s.db.Query(ctx, "SELECT id, title, author FROM books ORDER BY id LIMIT $1 OFFSET $2", pageSize, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +142,7 @@ func (s *server) ListBooks(ctx context.Context, req *pb.ListBookRequest) (*pb.Li
 	var books []*pb.Book
 	for rows.Next() {
 		var b pb.Book
-		if err := rows.Scan(&b.Id, &b.Title, &b.Auther); err != nil {
+		if err := rows.Scan(&b.Id, &b.Title, &b.Author); err != nil {
 			return nil, err
 		}
 		books = append(books, &b)
@@ -159,10 +161,10 @@ func (s *server) BatchAddBooks(stream pb.LibraryService_BatchAddBooksServer) err
 	for {
 		book, err := stream.Recv()
 		if err == io.EOF {
-			return stream.SendAndClose(&pb.BatchResponse{Reponses: responses})
+			return stream.SendAndClose(&pb.BatchResponse{Responses: responses})
 		}
 		if err != nil {
-			return status.Errorf(13, "failed to receive book: %v", err)
+			return status.Errorf(codes.Internal, "failed to receive book: %v", err)
 		}
 		if book.GetId() == "" {
 			responses = append(responses, &pb.BookResponse{Id: "", Message: "Book ID is required"})
@@ -178,7 +180,7 @@ func (s *server) BatchAddBooks(stream pb.LibraryService_BatchAddBooksServer) err
 			responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Book already exists"})
 			continue
 		}
-		_, err = s.db.Exec(ctx, "INSERT INTO books (id, title, auther) VALUES ($1, $2, $3)", book.GetId(), book.GetTitle(), book.GetAuther())
+		_, err = s.db.Exec(ctx, "INSERT INTO books (id, title, author) VALUES ($1, $2, $3)", book.GetId(), book.GetTitle(), book.GetAuthor())
 		if err != nil {
 			responses = append(responses, &pb.BookResponse{Id: book.GetId(), Message: "Failed to add book"})
 			continue
@@ -188,6 +190,9 @@ func (s *server) BatchAddBooks(stream pb.LibraryService_BatchAddBooksServer) err
 }
 
 func main() {
+	clearDB := flag.Bool("clear-db", false, "Clear all data from database on startup")
+	flag.Parse()
+
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -198,6 +203,14 @@ func main() {
 	}
 	defer dbpool.Close()
 
+	if *clearDB {
+		fmt.Println("Clearing database...")
+		if err := ClearDatabase(dbpool); err != nil {
+			log.Fatalf("failed to clear database: %v", err)
+		}
+		fmt.Println("Database cleared successfully!")
+	}
+
 	if err := RunMigrations(dbpool); err != nil {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
@@ -206,7 +219,11 @@ func main() {
 	pb.RegisterUserServiceServer(s, &server{db: dbpool})
 	pb.RegisterLibraryServiceServer(s, &server{db: dbpool})
 
-	fmt.Println("Server is running on port: 50051")
+	// Start REST gateway in background
+	go StartGateway()
+
+	fmt.Println("gRPC Server is running on port: 50051")
+	fmt.Println("REST Gateway is running on port: 8080")
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}

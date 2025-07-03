@@ -46,7 +46,7 @@ func main() {
 	book := &pb.Book{
 		Id:     "book1",
 		Title:  "Go Programming",
-		Auther: "John Doe",
+		Author: "John Doe",
 	}
 
 	// AddBook
@@ -76,7 +76,7 @@ func main() {
 		b := &pb.Book{
 			Id:     fmt.Sprintf("book%d", i),
 			Title:  fmt.Sprintf("Book Title %d", i),
-			Auther: fmt.Sprintf("Author %d", i),
+			Author: fmt.Sprintf("Author %d", i),
 		}
 		_, err := libraryClient.AddBook(context.Background(), b)
 		if err != nil {
@@ -94,7 +94,7 @@ func main() {
 	}
 	fmt.Printf("ListBooks Response: total=%d\n", listResp.GetTotalCount())
 	for i, b := range listResp.GetBooks() {
-		fmt.Printf("Book %d: ID=%s, Title=%s, Auther=%s\n", i+1, b.GetId(), b.GetTitle(), b.GetAuther())
+		fmt.Printf("Book %d: ID=%s, Title=%s, Author=%s\n", i+1, b.GetId(), b.GetTitle(), b.GetAuthor())
 	}
 
 	// BatchAddBooks (client-side streaming)
@@ -106,7 +106,7 @@ func main() {
 		b := &pb.Book{
 			Id:     fmt.Sprintf("batchbook%d", i),
 			Title:  fmt.Sprintf("Batch Book Title %d", i),
-			Auther: fmt.Sprintf("Batch Author %d", i),
+			Author: fmt.Sprintf("Batch Author %d", i),
 		}
 		if err := batchStream.Send(b); err != nil {
 			log.Fatalf("failed to send book %d: %v", i, err)
@@ -117,7 +117,9 @@ func main() {
 		log.Fatalf("failed to receive batch response: %v", err)
 	}
 	fmt.Println("BatchAddBooks Response:")
-	for i, r := range batchResp.GetReponses() {
+	for i, r := range batchResp.GetResponses() {
 		fmt.Printf("  Book %d: ID=%s, Message=%s\n", i+1, r.GetId(), r.GetMessage())
 	}
+
+	fmt.Println("All tests completed successfully!")
 }
