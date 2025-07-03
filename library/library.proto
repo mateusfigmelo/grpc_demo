@@ -1,19 +1,46 @@
 syntax = "proto3";
-
-option go_package = "example/grpc_demo/library";
-
 package library;
+option go_package = "example/grpc_demo/library";
+import "google/api/annotations.proto";
 
 service UserService {
-    rpc Register(User) returns (AuthResponse);
-    rpc Login(UserCredentials) returns (AuthResponse);
+    rpc Register(User) returns (AuthResponse) {
+        option (google.api.http) = {
+            post: "/api/v1/auth/register"
+            body: "*"
+        };
+    }
+    rpc Login(UserCredentials) returns (AuthResponse) {
+        option (google.api.http) = {
+            post: "/api/v1/auth/login"
+            body: "*"
+        };
+    }
 }
 
 service LibraryService {
-    rpc AddBook(Book) returns (BookResponse);
-    rpc UpdateBook(Book) returns (BookResponse);
-    rpc DeleteBook(BookRequest) returns (BookResponse);
-    rpc ListBooks(ListBookRequest) returns (ListBookResponse);
+    rpc AddBook(Book) returns (BookResponse) {
+        option (google.api.http) = {
+            post: "/api/v1/books"
+            body: "*"
+        };
+    }
+    rpc UpdateBook(Book) returns (BookResponse) {
+        option (google.api.http) = {
+            put: "/api/v1/books/{id}"
+            body: "*"
+        };
+    }
+    rpc DeleteBook(BookRequest) returns (BookResponse) {
+        option (google.api.http) = {
+            delete: "/api/v1/books/{id}"
+        };
+    }
+    rpc ListBooks(ListBookRequest) returns (ListBookResponse) {
+        option (google.api.http) = {
+            get: "/api/v1/books"
+        };
+    }
     rpc BatchAddBooks(stream Book) returns (BatchResponse);
 }
 
@@ -44,7 +71,7 @@ message BookResponse {
 message Book {
     string id = 1;
     string title = 2;
-    string auther = 3;
+    string author = 3;
 }
 
 message ListBookRequest {
@@ -58,5 +85,5 @@ message ListBookResponse {
 }
 
 message BatchResponse {
-    repeated BookResponse reponses = 1;
+    repeated BookResponse responses = 1;
 }
