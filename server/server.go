@@ -27,6 +27,11 @@ func (s *server) Register(ctx context.Context, user *pb.User) (*pb.AuthResponse,
 	username := user.GetUsername()
 	password := user.GetPassword()
 
+	// Validate input
+	if username == "" || password == "" {
+		return &pb.AuthResponse{Message: "Username and password are required"}, nil
+	}
+
 	// Check if user exists
 	var exists bool
 	err := s.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE username=$1)", username).Scan(&exists)
@@ -42,14 +47,22 @@ func (s *server) Register(ctx context.Context, user *pb.User) (*pb.AuthResponse,
 		return &pb.AuthResponse{Message: "Failed to hash password"}, err
 	}
 
-	_, err = s.db.Exec(ctx, "INSERT INTO users (username, password_hash) VALUES ($1, $2)", username, string(hash))
+	// Insert user and get the generated ID
+	var userID int
+	err = s.db.QueryRow(ctx, "INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id", username, string(hash)).Scan(&userID)
 	if err != nil {
 		return &pb.AuthResponse{Message: "Failed to create user"}, err
 	}
 
+	// Generate JWT token
+	token, err := GenerateJWT(userID, username)
+	if err != nil {
+		return &pb.AuthResponse{Message: "Failed to generate token"}, err
+	}
+
 	return &pb.AuthResponse{
 		Message: "User registered successfully",
-		Token:   "dummy_token",
+		Token:   token,
 	}, nil
 }
 
@@ -57,8 +70,14 @@ func (s *server) Login(ctx context.Context, creds *pb.UserCredentials) (*pb.Auth
 	username := creds.GetUsername()
 	password := creds.GetPassword()
 
+	// Validate input
+	if username == "" || password == "" {
+		return &pb.AuthResponse{Message: "Username and password are required"}, nil
+	}
+
+	var userID int
 	var hash string
-	err := s.db.QueryRow(ctx, "SELECT password_hash FROM users WHERE username=$1", username).Scan(&hash)
+	err := s.db.QueryRow(ctx, "SELECT id, password_hash FROM users WHERE username=$1", username).Scan(&userID, &hash)
 	if err != nil {
 		return &pb.AuthResponse{Message: "Invalid username or password"}, nil
 	}
@@ -68,9 +87,15 @@ func (s *server) Login(ctx context.Context, creds *pb.UserCredentials) (*pb.Auth
 		return &pb.AuthResponse{Message: "Invalid username or password"}, nil
 	}
 
+	// Generate JWT token
+	token, err := GenerateJWT(userID, username)
+	if err != nil {
+		return &pb.AuthResponse{Message: "Failed to generate token"}, err
+	}
+
 	return &pb.AuthResponse{
 		Message: "Login successful",
-		Token:   "dummy_token",
+		Token:   token,
 	}, nil
 }
 
@@ -215,7 +240,11 @@ func main() {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
-	s := grpc.NewServer()
+	// Create gRPC server with database-aware authentication interceptors
+	s := grpc.NewServer(
+		grpc.UnaryInterceptor(CreateAuthInterceptor(dbpool)),
+		grpc.StreamInterceptor(CreateStreamAuthInterceptor(dbpool)),
+	)
 	pb.RegisterUserServiceServer(s, &server{db: dbpool})
 	pb.RegisterLibraryServiceServer(s, &server{db: dbpool})
 
