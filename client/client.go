@@ -9,7 +9,18 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
+
+// AuthenticatedClient wraps the gRPC client with authentication
+type AuthenticatedClient struct {
+	token string
+}
+
+// addAuthToContext adds the authentication token to the context
+func (a *AuthenticatedClient) addAuthToContext(ctx context.Context) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+a.token)
+}
 
 func main() {
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -23,6 +34,7 @@ func main() {
 	username := "testUser"
 	password := "password123"
 
+	// Registration (no authentication required)
 	regResp, err := client.Register(context.Background(), &pb.User{
 		Username: username,
 		Password: password,
@@ -32,6 +44,7 @@ func main() {
 	}
 	fmt.Printf("Register Response: %s, Token: %s\n", regResp.GetMessage(), regResp.GetToken())
 
+	// Login (no authentication required)
 	loginResp, err := client.Login(context.Background(), &pb.UserCredentials{
 		Username: username,
 		Password: password,
@@ -41,7 +54,10 @@ func main() {
 	}
 	fmt.Printf("Login Response: %s, Token: %s\n", loginResp.GetMessage(), loginResp.GetToken())
 
-	// Book management tests
+	// Create authenticated client wrapper
+	authClient := &AuthenticatedClient{token: loginResp.GetToken()}
+
+	// Book management tests (all require authentication)
 	libraryClient := pb.NewLibraryServiceClient(conn)
 	book := &pb.Book{
 		Id:     "book1",
@@ -49,43 +65,43 @@ func main() {
 		Author: "John Doe",
 	}
 
-	// AddBook
-	addResp, err := libraryClient.AddBook(context.Background(), book)
+	// AddBook (with authentication)
+	addResp, err := libraryClient.AddBook(authClient.addAuthToContext(context.Background()), book)
 	if err != nil {
 		log.Fatalf("could not add book: %v", err)
 	}
 	fmt.Printf("AddBook Response: %s, ID: %s\n", addResp.GetMessage(), addResp.GetId())
 
-	// UpdateBook
+	// UpdateBook (with authentication)
 	book.Title = "Advanced Go Programming"
-	updateResp, err := libraryClient.UpdateBook(context.Background(), book)
+	updateResp, err := libraryClient.UpdateBook(authClient.addAuthToContext(context.Background()), book)
 	if err != nil {
 		log.Fatalf("could not update book: %v", err)
 	}
 	fmt.Printf("UpdateBook Response: %s, ID: %s\n", updateResp.GetMessage(), updateResp.GetId())
 
-	// DeleteBook
-	deleteResp, err := libraryClient.DeleteBook(context.Background(), &pb.BookRequest{Id: book.GetId()})
+	// DeleteBook (with authentication)
+	deleteResp, err := libraryClient.DeleteBook(authClient.addAuthToContext(context.Background()), &pb.BookRequest{Id: book.GetId()})
 	if err != nil {
 		log.Fatalf("could not delete book: %v", err)
 	}
 	fmt.Printf("DeleteBook Response: %s, ID: %s\n", deleteResp.GetMessage(), deleteResp.GetId())
 
-	// Add multiple books for pagination test
+	// Add multiple books for pagination test (with authentication)
 	for i := 1; i <= 10; i++ {
 		b := &pb.Book{
 			Id:     fmt.Sprintf("book%d", i),
 			Title:  fmt.Sprintf("Book Title %d", i),
 			Author: fmt.Sprintf("Author %d", i),
 		}
-		_, err := libraryClient.AddBook(context.Background(), b)
+		_, err := libraryClient.AddBook(authClient.addAuthToContext(context.Background()), b)
 		if err != nil {
 			log.Printf("could not add book %d: %v", i, err)
 		}
 	}
 
-	// ListBooks
-	listResp, err := libraryClient.ListBooks(context.Background(), &pb.ListBookRequest{
+	// ListBooks (with authentication)
+	listResp, err := libraryClient.ListBooks(authClient.addAuthToContext(context.Background()), &pb.ListBookRequest{
 		Page:     1,
 		PageSize: 5,
 	})
@@ -97,8 +113,8 @@ func main() {
 		fmt.Printf("Book %d: ID=%s, Title=%s, Author=%s\n", i+1, b.GetId(), b.GetTitle(), b.GetAuthor())
 	}
 
-	// BatchAddBooks (client-side streaming)
-	batchStream, err := libraryClient.BatchAddBooks(context.Background())
+	// BatchAddBooks (client-side streaming with authentication)
+	batchStream, err := libraryClient.BatchAddBooks(authClient.addAuthToContext(context.Background()))
 	if err != nil {
 		log.Fatalf("could not start batch add books: %v", err)
 	}
@@ -122,4 +138,17 @@ func main() {
 	}
 
 	fmt.Println("All tests completed successfully!")
+
+	// Test unauthorized access (optional - to demonstrate authentication works)
+	fmt.Println("\n--- Testing unauthorized access ---")
+	_, err = libraryClient.AddBook(context.Background(), &pb.Book{
+		Id:     "unauthorized-book",
+		Title:  "This should fail",
+		Author: "Anonymous",
+	})
+	if err != nil {
+		fmt.Printf("Expected error for unauthorized request: %v\n", err)
+	} else {
+		fmt.Println("WARNING: Unauthorized request succeeded (this should not happen)")
+	}
 }
